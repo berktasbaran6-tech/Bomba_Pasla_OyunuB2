@@ -39,9 +39,10 @@ export function GameArena({
   const remainingFreeze = me?.frozenUntil ? Math.max(0, (me.frozenUntil - Date.now()) / 1000) : 0;
 
   const isHolding = !!bomb && bomb.holderId === currentUserId;
+  const isMeEliminated = me ? me.alive === false : false;
   const panicThreshold = bomb?.panicThresholdSec || 24;
   const isNearExplosion = remainingTotal <= panicThreshold && state === 'PLAYING';
-  const canPassNow = isHolding && remainingLock <= 0 && !isExploding && !isMeFrozen;
+  const canPassNow = !isMeEliminated && isHolding && remainingLock <= 0 && !isExploding && !isMeFrozen;
 
   useEffect(() => {
     isNearRef.current = isNearExplosion;
@@ -243,6 +244,10 @@ export function GameArena({
   /* ── Hedef Oyuncuya Tıklama (Pas veya Yetenek) ──────────────── */
   const handlePlayerClick = useCallback((targetPlayer) => {
     if (state !== 'PLAYING') return;
+    if (targetPlayer.alive === false) {
+      showFeedback('warn', `${targetPlayer.name} elendi!`);
+      return;
+    }
 
     // Hedef seçimi modundaysak yeteneği uygula!
     if (targetingAbility) {
@@ -396,13 +401,15 @@ export function GameArena({
 
         {/* Daire Üzerindeki Oyuncular */}
         {players.map((player, i) => {
-          const hasBomb = !!bomb && bomb.holderId === player.id;
+          const isDead = player.alive === false;
+          const hasBomb = !isDead && !!bomb && bomb.holderId === player.id;
+          const isVictimExploding = isExploding && hasBomb;
           const pos     = positions[i];
-          const isTargetableForPass = canPassNow && player.id !== currentUserId && !targetingAbility;
-          const isTargetableForAbility = !!targetingAbility && player.id !== currentUserId;
+          const isTargetableForPass = !isDead && canPassNow && player.id !== currentUserId && !targetingAbility;
+          const isTargetableForAbility = !isDead && !!targetingAbility && player.id !== currentUserId;
           const isClickable = isTargetableForPass || isTargetableForAbility;
 
-          const isPlayerFrozen = player.frozen || Date.now() < (player.frozenUntil || 0);
+          const isPlayerFrozen = !isDead && (player.frozen || Date.now() < (player.frozenUntil || 0));
           const activeSymbol = floatingSymbols[player.id];
 
           return (
@@ -418,11 +425,11 @@ export function GameArena({
                 left:      pos.x,
                 top:       pos.y,
                 transform: 'translate(-50%, -50%)',
-                zIndex:    hasBomb ? 25 : isClickable ? 20 : 5,
+                zIndex:    hasBomb ? 25 : isClickable ? 20 : isDead ? 2 : 5,
               }}
             >
               {/* 1 Saniyelik Parlayan Güç Sembolü Efekti */}
-              {activeSymbol && (
+              {activeSymbol && !isDead && (
                 <div className="absolute -top-12 z-50 pointer-events-none animate-bounce">
                   <div className="flex items-center justify-center w-12 h-12 rounded-full bg-slate-900/95 border-2 border-amber-400 shadow-2xl shadow-amber-400/80 text-2xl scale-125">
                     {activeSymbol.symbol}
@@ -461,25 +468,35 @@ export function GameArena({
                   hasBomb={hasBomb}
                   isYou={player.id === currentUserId}
                   isFrozen={isPlayerFrozen}
+                  isEliminated={isDead}
+                  isExploding={isVictimExploding}
                 />
               </div>
 
               <div className="flex items-center gap-1">
                 <span className={`text-[11px] font-bold whitespace-nowrap px-1 rounded flex items-center gap-1 ${
-                  hasBomb
+                  isDead
+                    ? 'text-slate-500 bg-slate-900/90'
+                    : hasBomb
                     ? 'text-amber-300 bg-amber-950/60'
                     : isClickable
                     ? 'text-emerald-300 group-hover:text-emerald-200'
                     : 'text-slate-400'
                 }`}>
-                  {isPlayerFrozen && <span>❄️</span>}
-                  <span>{player.name}</span>
+                  {isDead && <span>💀</span>}
+                  {isPlayerFrozen && !isDead && <span>❄️</span>}
+                  <span className={isDead ? 'line-through opacity-75' : ''}>{player.name}</span>
                   {player.id === currentUserId ? ' (Sen)' : ''}
                 </span>
                 <span className="text-[10px] bg-amber-500/20 text-amber-300 px-1.5 py-0.2 rounded-full font-bold border border-amber-500/30">
                   🏆{player.score || 0}
                 </span>
               </div>
+              {isDead && (
+                <span className="text-[9px] font-black text-rose-400 bg-rose-950/90 border border-rose-800/80 px-1.5 rounded-full uppercase tracking-tighter shadow -mt-0.5 animate-pulse">
+                  💨 Elendi
+                </span>
+              )}
             </div>
           );
         })}
@@ -565,9 +582,11 @@ export function GameArena({
         {/* Ana Pas Butonu */}
         <button
           onClick={handleRandomPass}
-          disabled={!isHolding || isExploding || isMeFrozen}
+          disabled={isMeEliminated || !isHolding || isExploding || isMeFrozen}
           className={`w-full py-3.5 rounded-2xl font-black text-lg tracking-wider uppercase transition-all duration-150 shadow-xl border-b-4 ${
-            isMeFrozen
+            isMeEliminated
+              ? 'bg-rose-950/80 text-rose-300 border-rose-900/80 cursor-not-allowed opacity-90'
+              : isMeFrozen
               ? 'bg-cyan-700 text-cyan-100 border-cyan-900 opacity-90 cursor-not-allowed animate-pulse'
               : isHolding
               ? remainingLock > 0
@@ -576,7 +595,9 @@ export function GameArena({
               : 'bg-slate-800 text-slate-500 border-slate-900 opacity-50 cursor-not-allowed'
           }`}
         >
-          {isMeFrozen
+          {isMeEliminated
+            ? <span>💥 ELENDİN (OYUN İZLENİYOR...)</span>
+            : isMeFrozen
             ? <span>🥶 DONDU! ({Math.ceil(remainingFreeze)}s BEKLE)</span>
             : isHolding
             ? remainingLock > 0

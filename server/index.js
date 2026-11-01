@@ -151,7 +151,10 @@ io.on('connection', (socket) => {
     const room = rooms.get(roomCode);
     if (!room) return;
     const targetId = typeof data === 'object' ? data?.targetId : data;
-    room.engine.useAbility(socket.id, targetId || null);
+    const result = room.engine.useAbility(socket.id, targetId || null);
+    if (!result || !result.ok) {
+      socket.emit('room:error', result?.reason === 'NOT_READY' ? 'Yeteneğin henüz hazır değil!' : 'Yetenek kullanılamadı!');
+    }
   });
 
   // ── Tekrar oyna (host sıfırla) ───────────────────────────────────

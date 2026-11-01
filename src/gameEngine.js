@@ -316,32 +316,61 @@ export class GameEngine {
    */
   scheduleBotPass(botId) {
     clearTimeout(this.botTimer);
+    if (this.state !== GAME_STATES.PLAYING) return;
+    if (this.bombManager.holderId !== botId) return;
 
+    const bot = this.getPlayer(botId);
+    if (!bot || !bot.alive) return;
+
+    const now = Date.now();
     const { lockEndsAt } = this.bombManager.getState();
-    const wait = Math.max(0, lockEndsAt - Date.now()) + 300 + Math.floor(Math.random() * 900);
+    const freeAt = Math.max(lockEndsAt, bot.frozenUntil || 0);
+    const wait = Math.max(0, freeAt - now) + 250 + Math.floor(Math.random() * 500);
 
     this.botTimer = setTimeout(() => {
       if (this.state !== GAME_STATES.PLAYING) return;
       if (this.bombManager.holderId !== botId) return;
 
-      const bot = this.getPlayer(botId);
-      if (bot && bot.abilityReady && Math.random() < 0.45) {
-        if (bot.ability === 'adrenaline') {
+      const currentBot = this.getPlayer(botId);
+      if (!currentBot || !currentBot.alive) return;
+
+      // Donma süresi devam ediyorsa veya kilit bitmediyse tekrar zamanla
+      if (currentBot.frozenUntil > Date.now() || Date.now() < this.bombManager.unlockAt) {
+        this.scheduleBotPass(botId);
+        return;
+      }
+
+      // Bot yetenek kullanımı (%35 şans)
+      if (currentBot.abilityReady && Math.random() < 0.35) {
+        if (currentBot.ability === 'adrenaline') {
           this.useAbility(botId);
-        } else if (bot.ability === 'mirror' && this.bombManager.lastHolderId) {
-          this.useAbility(botId);
-          return;
-        } else if (bot.ability === 'swap') {
+        } else if (currentBot.ability === 'mirror' && this.bombManager.lastHolderId) {
+          const res = this.useAbility(botId);
+          if (res && res.ok) return;
+        } else if (currentBot.ability === 'swap') {
+          const target = this.pickTarget(botId);
+          if (target) {
+            const res = this.useAbility(botId, target.id);
+            if (res && res.ok) return;
+          }
+        } else if (currentBot.ability === 'freeze') {
           const target = this.pickTarget(botId);
           if (target) {
             this.useAbility(botId, target.id);
-            return;
           }
         }
       }
 
       const target = this.pickTarget(botId);
-      if (target) this.handlePass(botId, target.id);
+      if (target) {
+        const passResult = this.handlePass(botId, target.id);
+        if (!passResult || !passResult.ok) {
+          // Başarısız olduysa (örn: hedef de donduysa veya kilit sürüyorsa) tekrar dene
+          this.scheduleBotPass(botId);
+        }
+      } else {
+        this.scheduleBotPass(botId);
+      }
     }, wait);
   }
 

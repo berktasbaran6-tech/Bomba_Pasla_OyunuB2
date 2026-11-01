@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { io } from 'socket.io-client';
 import { BombManager } from './bombmanager.js';
 import { GameArena } from './GameArena';
+import { AnimalCharacter } from './AnimalCharacter';
 import { getRandomAbility, getAbilityById, ABILITIES } from './abilities.js';
 
 /* ─── Sabitler ───────────────────────────────────────────────── */
@@ -186,15 +187,23 @@ export default function App() {
 
     function onAbilityUsed(data) {
       setLastAbilityEvent(data);
+      if (data.players) {
+        setAlivePlayers(data.players.filter(p => p.alive));
+        setLobbyPlayers(data.players);
+      }
+      if (data.bomb) {
+        setBombState(data.bomb);
+      }
     }
 
     function onBombExploded(data) {
       setBombState(null);
-      const victim = data.players?.find(p => p.id === data.playerId);
+      const victim = data.players?.find(p => p.id === data.playerId) || lobbyPlayers.find(p => p.id === data.playerId);
       const isMe = data.playerId === globalSocket.id;
       setExplodeInfo({
         victimId: data.playerId,
         victimName: victim?.name ?? 'Oyuncu',
+        victimAnimal: victim?.animal ?? 'cat',
         isMe,
         penalty: data.penalty || 'Ceza belirlendi!',
       });
@@ -246,19 +255,33 @@ export default function App() {
   /* ── Yerel Offline Mod Yardımı ────────────────────────────── */
   const scheduleBotPass = useCallback((botId) => {
     clearTimeout(botTimers.current[botId]);
+    const bot = aliveRef.current.find(p => p.id === botId);
+    if (!bot || !bot.alive) return;
+
     const lockEndsAt = bombRef.current?.unlockAt ?? Date.now();
-    const wait = Math.max(0, lockEndsAt - Date.now()) + 300 + Math.floor(Math.random() * 900);
+    const freeAt = Math.max(lockEndsAt, bot.frozenUntil || 0);
+    const wait = Math.max(0, freeAt - Date.now()) + 250 + Math.floor(Math.random() * 500);
 
     botTimers.current[botId] = setTimeout(() => {
       if (!bombRef.current?.active || bombRef.current.holderId !== botId) return;
       const alive = aliveRef.current;
+      const currentBot = alive.find(p => p.id === botId);
+      if (!currentBot || !currentBot.alive) return;
+
+      if (currentBot.frozenUntil > Date.now() || Date.now() < (bombRef.current?.unlockAt ?? 0)) {
+        scheduleBotPass(botId);
+        return;
+      }
+
       const candidates = alive.filter(p => p.id !== botId);
       if (!candidates.length) return;
       const target = candidates[Math.floor(Math.random() * candidates.length)];
       const result = bombRef.current.passBomb(botId, target.id);
-      if (result.ok) {
+      if (result && result.ok) {
         setBombState({ ...bombRef.current.getState() });
         if (target.isBot) scheduleBotPass(target.id);
+      } else {
+        scheduleBotPass(botId);
       }
     }, wait);
   }, []);
@@ -280,6 +303,7 @@ export default function App() {
       setExplodeInfo({
         victimId,
         victimName: victim?.name ?? 'Oyuncu',
+        victimAnimal: victim?.animal ?? 'cat',
         isMe: victimId === myId,
         penalty: victim?.penalty || 'Ceza belirlendi!',
       });
@@ -364,10 +388,15 @@ export default function App() {
   const handleUseAbility = useCallback((abilityId, targetId = null) => {
     if (globalSocket?.connected && roomCode) {
       globalSocket.emit('ability:use', { targetId });
+      // UI'da yeteneğin kullanıldığını anında yansıt
+      setAlivePlayers(prev => prev.map(p => p.id === myId ? { ...p, abilityReady: false, bombTouchesAfterUse: 0 } : p));
       return;
     }
 
     // Yerel Offline Mod
+    const me = aliveRef.current.find(p => p.id === myId);
+    if (!me || !me.abilityReady) return;
+
     const ability = getAbilityById(abilityId);
     if (!ability) return;
 
@@ -791,11 +820,24 @@ export default function App() {
   /* ── 3. EXPLODE EKRANI ────────────────────────────────────── */
   if (screen === 'EXPLODE') {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center gap-6 bg-slate-900 select-none p-4">
-        <div className="text-8xl animate-bounce">💥</div>
+      <div className="min-h-screen flex flex-col items-center justify-center gap-5 bg-slate-900 select-none p-4">
+        {/* Karakterin Patlama, Duman ve Yıldız Efekti */}
+        <div className="relative flex flex-col items-center my-3">
+          <div className="absolute inset-0 -m-8 bg-red-600/30 rounded-full blur-2xl animate-pulse pointer-events-none" />
+          <AnimalCharacter
+            animal={explodeInfo?.victimAnimal || 'cat'}
+            name={explodeInfo?.victimName}
+            isEliminated={true}
+            isExploding={true}
+          />
+          <span className="text-[11px] font-black text-rose-400 bg-rose-950/90 border border-rose-800/80 px-3 py-1 rounded-full uppercase mt-4 shadow-lg animate-bounce">
+            💨 DUMANLAR İÇİNDE ELENDİ!
+          </span>
+        </div>
+
         <div className="text-center">
-          <p className="text-5xl font-black text-red-500">PATLADI!</p>
-          <p className="text-2xl text-slate-200 mt-2 font-bold">
+          <p className="text-4xl font-black text-red-500">BOOOOM! PATLADI!</p>
+          <p className="text-xl text-slate-200 mt-1 font-bold">
             {explodeInfo?.isMe
               ? '😱 Bomba sende patladı!'
               : `😅 ${explodeInfo?.victimName} patladı!`}
@@ -809,7 +851,7 @@ export default function App() {
           </div>
         )}
 
-        <p className="text-slate-500 text-xs animate-pulse">Sonraki tur başlıyor...</p>
+        <p className="text-slate-500 text-xs animate-pulse mt-2">Sonraki tur başlıyor...</p>
       </div>
     );
   }
@@ -914,6 +956,21 @@ export default function App() {
   /* ── 5. PLAYING EKRANI ────────────────────────────────────── */
   const myCurrentScore = lobbyPlayers.find(p => p.id === myId)?.score || 0;
 
+  // Tüm lobi oyuncularını dairesel arenada tutuyoruz.
+  // Elenen oyuncular alive: false olarak dumanlı ve başı dönen şekilde kalmaya devam eder!
+  const arenaPlayers = (lobbyPlayers && lobbyPlayers.length > 0 ? lobbyPlayers : alivePlayers).map(p => {
+    const isAlive = alivePlayers.some(a => a.id === p.id);
+    const aliveMatch = alivePlayers.find(a => a.id === p.id);
+    return {
+      ...p,
+      alive: isAlive,
+      frozen: aliveMatch?.frozen || false,
+      frozenUntil: aliveMatch?.frozenUntil || 0,
+      abilityReady: aliveMatch?.abilityReady ?? p.abilityReady,
+      bombTouchesAfterUse: aliveMatch?.bombTouchesAfterUse ?? p.bombTouchesAfterUse,
+    };
+  });
+
   return (
     <div className="min-h-screen flex flex-col items-center justify-start pt-3 bg-slate-900">
       <div className="text-xs text-slate-500 font-bold mb-1 flex items-center gap-3">
@@ -930,7 +987,7 @@ export default function App() {
         <GameArena
           state="PLAYING"
           bomb={bombState}
-          players={alivePlayers}
+          players={arenaPlayers}
           currentUserId={myId}
           serverOffsetMs={0}
           onPass={handlePass}

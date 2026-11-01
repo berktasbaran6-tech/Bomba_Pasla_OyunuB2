@@ -15,8 +15,8 @@
 
 const TOTAL_MIN_SEC = 60;  // 1 dakika
 const TOTAL_MAX_SEC = 180; // 3 dakika
-const LOCK_MIN_SEC = 1;
-const LOCK_MAX_SEC = 10;   // Maksimum 10 saniye kilit!
+const LOCK_MIN_SEC = 1.2;
+const LOCK_MAX_SEC = 3.8;   // Dengeli ve dinamik pas kilidi (1.2 - 3.8 sn)
 
 export class BombManager {
   constructor(onExplodeCallback) {
